@@ -6,6 +6,10 @@ import Leanwuzla.Parser
 
 open Lean
 
+def IO.printlnAndFlush {α} [ToString α] (a : α) : IO Unit := do
+  IO.println a
+  (← IO.getStdout).flush
+
 private partial def getIntrosSize (e : Expr) : Nat :=
   go 0 e
 where
@@ -80,7 +84,7 @@ def decideSmt (type : Expr) : SolverM UInt32 := do
       discard <| Tactic.BVDecide.Frontend.bvDecide mv' ctx
   catch e =>
     let t2 ← IO.monoNanosNow
-    IO.println s!"[time] solve: {t2 - t1}"
+    IO.printlnAndFlush s!"[time] solve: {t2 - t1}"
     -- TODO: improve handling of sat cases. This is a temporary workaround.
     let message ← e.toMessageData.toString
     if message.startsWith "The prover found a counterexample" ||
@@ -93,12 +97,12 @@ def decideSmt (type : Expr) : SolverM UInt32 := do
       logError m!"Error: {e.toMessageData}"
       return (1 : UInt32)
   let t2 ← IO.monoNanosNow
-  IO.println s!"[time] solve: {t2 - t1}"
+  IO.printlnAndFlush s!"[time] solve: {t2 - t1}"
   let value ← instantiateExprMVars mv
   let t1 ← IO.monoNanosNow
   let r := (← getEnv).addDecl (← getOptions) (.thmDecl { name := ← Lean.mkAuxName `thm 1, levelParams := [], type, value })
   let t2 ← IO.monoNanosNow
-  IO.println s!"[time] kernel: {t2 - t1}"
+  IO.printlnAndFlush s!"[time] kernel: {t2 - t1}"
   match r with
   | .error e =>
     logError m!"Error: {e.toMessageData (← getOptions)}"
@@ -127,7 +131,7 @@ def parseAndDecideSmt2File : SolverM UInt32 := do
     let t1 ← IO.monoNanosNow
     let goalType ← parseSmt2File (← SolverM.getInput)
     let t2 ← IO.monoNanosNow
-    IO.println s!"[time] parse: {t2 - t1}"
+    IO.printlnAndFlush s!"[time] parse: {t2 - t1}"
     if ← SolverM.getParseOnly then
       typeCheck goalType
     else
@@ -147,7 +151,7 @@ unsafe def runLeanwuzlaCmd (p : Parsed) : IO UInt32 := do
   Lean.initSearchPath (← Lean.findSysroot)
   withImportModules #[`Std.Tactic.BVDecide, `Leanwuzla.Aux] {} 0 fun env => do
     let t2 ← IO.monoNanosNow
-    IO.println s!"[time] load: {t2 - t1}"
+    IO.printlnAndFlush s!"[time] load: {t2 - t1}"
     let coreContext := { fileName := "leanwuzla", fileMap := default, options }
     let coreState := { env }
     SolverM.run parseAndDecideSmt2File context coreContext coreState
