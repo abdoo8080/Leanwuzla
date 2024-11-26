@@ -43,8 +43,8 @@ def bvNormalize' (g : MVarId) (cfg : BVDecideConfig) : MetaM (Option MVarId) := 
     -- Contradiction proof
     let some g ← g.falseOrByContra | return none
     trace[Meta.Tactic.bv] m!"Running preprocessing pipeline on:\n{g}"
-    let some g ← Pass.runPipeline' (Pass.initialPipeline cfg) g | return none
-    trace[Meta.Tactic.bv] m!"Finished initial preprocessing step:\n{g}"
+    -- let some g ← Pass.runPipeline' (Pass.initialPipeline cfg) g | return none
+    -- trace[Meta.Tactic.bv] m!"Finished initial preprocessing step:\n{g}"
     Pass.runToFixpoint' (Pass.fixpointPipeline cfg) g
 
 end Lean.Elab.Tactic.BVDecide.Frontend.Normalize
