@@ -1,5 +1,6 @@
 import Cli
 
+import Leanwuzla.BVDecide
 import Leanwuzla.Parser
 import Leanwuzla.Basic
 import Leanwuzla.NoKernel
@@ -20,7 +21,7 @@ def decideSmt (type : Expr) : SolverM UInt8 := do
     mv'.withContext $ IO.FS.withTempFile fun _ lratFile => do
       let cfg ← SolverM.getBVDecideConfig
       let ctx ← (Tactic.BVDecide.Frontend.TacticContext.new lratFile cfg).run' { declName? := `lrat }
-      discard <| Tactic.BVDecide.Frontend.bvDecide mv' ctx
+      discard <| Tactic.BVDecide.Frontend.bvDecide'' mv' ctx
   catch e =>
     -- TODO: improve handling of sat cases. This is a temporary workaround.
     let message ← e.toMessageData.toString
@@ -35,7 +36,10 @@ def decideSmt (type : Expr) : SolverM UInt8 := do
       return (1 : UInt8)
   let value ← instantiateExprMVars mv
   try
+    let t1 ← IO.monoNanosNow
     Lean.addDecl (.thmDecl { name := ← Lean.mkAuxName `thm 1, levelParams := [], type, value })
+    let t2 ← IO.monoNanosNow
+    IO.printlnAndFlush s!"[time] kernel: {t2 - t1}"
     logInfo "unsat"
     return 0
   catch e =>
@@ -60,7 +64,10 @@ def typeCheck (e : Expr) : SolverM UInt8 := do
 
 def parseAndDecideSmt2File : SolverM UInt8 := do
   try
+    let t1 ← IO.monoNanosNow
     let goalType ← parseSmt2File (← SolverM.getInput)
+    let t2 ← IO.monoNanosNow
+    IO.printlnAndFlush s!"[time] parse: {t2 - t1}"
     if ← SolverM.getParseOnly then
       logInfo m!"Goal:\n{goalType}"
       typeCheck goalType
@@ -80,8 +87,11 @@ open Cli
 unsafe def runLeanwuzlaCmd (p : Parsed) : IO UInt32 := do
   let options := argsToOpts p
   let context := argsToContext p
+  let t1 ← IO.monoNanosNow
   Lean.initSearchPath (← Lean.findSysroot)
   withImportModules #[`Std.Tactic.BVDecide, `Leanwuzla.Aux] {} 0 fun env => do
+    let t2 ← IO.monoNanosNow
+    IO.printlnAndFlush s!"[time] load: {t2 - t1}"
     let coreContext := { fileName := "leanwuzla", fileMap := default, options }
     let coreState := { env }
     let code ← SolverM.run parseAndDecideSmt2File context coreContext coreState
