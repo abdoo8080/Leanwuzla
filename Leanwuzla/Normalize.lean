@@ -1,0 +1,112 @@
+import Lean.Elab.Tactic.BVDecide.Frontend.Normalize
+
+def IO.printlnAndFlush {α} [ToString α] (a : α) : IO Unit := do
+  IO.println a
+  (← IO.getStdout).flush
+
+namespace Lean.Elab.Tactic.BVDecide.Frontend.Normalize
+
+namespace Pass
+
+/--
+Repeatedly run a list of `Pass` until they either close the goal or an iteration doesn't change
+the goal anymore.
+-/
+partial def fixpointPipeline' (passes : List Pass) (goal : MVarId) : PreProcessM (Option MVarId) := do
+  let mut newGoal := goal
+  for pass in passes do
+    let t1 ← IO.monoNanosNow
+    let nextGoal' ← pass.run newGoal
+    let t2 ← IO.monoNanosNow
+    IO.printlnAndFlush s!"[time] {pass.name}: {t2 - t1}"
+    if let some nextGoal := nextGoal' then
+      newGoal := nextGoal
+    else
+      trace[Meta.Tactic.bv] "Fixpoint iteration solved the goal"
+      return none
+
+  if goal != newGoal then
+    trace[Meta.Tactic.bv] m!"Rerunning pipeline on:\n{newGoal}"
+    fixpointPipeline' passes newGoal
+  else
+    trace[Meta.Tactic.bv] "Pipeline reached a fixpoint"
+    return newGoal
+
+end Pass
+
+def bvNormalize' (g : MVarId) (cfg : BVDecideConfig) : MetaM (Option MVarId) := do
+  withTraceNode `Meta.Tactic.bv (fun _ => return "Preprocessing goal") do
+    (go g).run cfg g
+where
+  go (g : MVarId) : PreProcessM (Option MVarId) := do
+    let some g' ← g.falseOrByContra | return none
+    let mut g := g'
+
+    trace[Meta.Tactic.bv] m!"Running preprocessing pipeline on:\n{g}"
+    let cfg ← PreProcessM.getConfig
+
+    if cfg.structures || cfg.enums then
+      let t1 ← IO.monoNanosNow
+      let g' ← typeAnalysisPass.run g
+      let t2 ← IO.monoNanosNow
+      IO.printlnAndFlush s!"[time] {typeAnalysisPass.name}: {t2 - t1}"
+      let some g' := g' | return none
+      g := g'
+
+    /-
+    There is a tension between the structures and enums pass at play:
+    1. Enums should run before structures as it could convert matches on enums into `cond`
+       chains. This in turn can be used by the structures pass to float projections into control
+       flow which might be necessary.
+    2. Structures should run before enums as it could reveal new facts about enums that we might
+       need to handle. For example a structure might contain a field that contains a fact about
+       some enum. This fact needs to be processed properly by the enums pass
+
+    To resolve this tension we do the following:
+    1. Run the structures pass (if enabled)
+    2. Run the enums pass (if enabled)
+    3. Within the enums pass we rerun the part of the structures pass that could profit from the
+       enums pass as described above. This comes down to adding a few more lemmas to a simp
+       invocation that is going to happen in the enums pass anyway and should thus be cheap.
+    -/
+    if cfg.structures then
+      let t1 ← IO.monoNanosNow
+      let g' ← structuresPass.run g
+      let t2 ← IO.monoNanosNow
+      IO.printlnAndFlush s!"[time] {structuresPass.name}: {t2 - t1}"
+      let some g' := g' | return none
+      g := g'
+
+    if cfg.enums then
+      let t1 ← IO.monoNanosNow
+      let g' ← enumsPass.run g
+      let t2 ← IO.monoNanosNow
+      IO.printlnAndFlush s!"[time] {enumsPass.name}: {t2 - t1}"
+      let some g' :=  g' | return none
+      g := g'
+
+    if cfg.fixedInt then
+      let t1 ← IO.monoNanosNow
+      let g' ← intToBitVecPass.run g
+      let t2 ← IO.monoNanosNow
+      IO.printlnAndFlush s!"[time] {intToBitVecPass.name}: {t2 - t1}"
+      let some g' := g' | return none
+      g := g'
+
+    trace[Meta.Tactic.bv] m!"Running fixpoint pipeline on:\n{g}"
+    let pipeline ← passPipeline
+    let some g' ← Pass.fixpointPipeline' pipeline g | return none
+    /-
+    Run short circuiting once post fixpoint, as it increases the size of terms with
+    the aim of exposing potential short-circuit reasoning to the solver.
+    -/
+    if cfg.shortCircuit then
+      let t1 ← IO.monoNanosNow
+      let g' ← shortCircuitPass |>.run g'
+      let t2 ← IO.monoNanosNow
+      IO.printlnAndFlush s!"[time] {shortCircuitPass.name}: {t2 - t1}"
+      return g'
+    else
+      return g'
+
+end Lean.Elab.Tactic.BVDecide.Frontend.Normalize
