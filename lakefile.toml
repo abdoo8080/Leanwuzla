@@ -18,3 +18,12 @@ supportInterpreter = true
 scope = "leanprover"
 name = "Cli"
 rev = "main"
+
+# [[require]]
+# git = "https://github.com/opencompl/fp-lean"
+# name = "fp-lean"
+# rev = "main"
+
+[[require]]
+name = "fp-lean"
+path = "../fp-lean"
