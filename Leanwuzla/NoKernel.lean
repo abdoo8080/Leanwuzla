@@ -1,6 +1,7 @@
 module
 
 public import Leanwuzla.Basic
+import all Leanwuzla.BVDecide
 import all Lean.Meta.Tactic.BVDecide
 
 
@@ -37,7 +38,7 @@ public def decideSmtNoKernel (type : Expr) (getModel : Bool) : SolverM UInt8 := 
   try
     SolverM.runGrind <| Normalize.PreProcessM.run' (.new (.solve (some #[])) cfg) (.mvarIdTarget g) do
     g.withContext $ IO.FS.withTempFile fun _ lratPath => do
-      if ← Normalize.bvNormalize then
+      if ← Normalize.bvNormalize' then
         logInfo "unsat"
         return (0 : UInt8)
       let g ← Normalize.PreProcessM.getTargetMVarId
@@ -51,6 +52,7 @@ public def decideSmtNoKernel (type : Expr) (getModel : Bool) : SolverM UInt8 := 
         let atomsAssignment := Std.HashMap.ofList ((← getThe State).atoms.toList.map flipper)
         return (reflectionResult.bvExpr, atomsAssignment, reflectionResult.unusedHypotheses)
 
+      let t1 ← IO.monoNanosNow
       let entry ←
         withTraceNode `bv (fun _ => return "Bitblasting BVLogicalExpr to AIG") do
           -- lazyPure to prevent compiler lifting
@@ -66,17 +68,25 @@ public def decideSmtNoKernel (type : Expr) (getModel : Bool) : SolverM UInt8 := 
             let cnf := Std.Sat.AIG.toCNF entry
             (cnf, map)
           )
+      let t2 ← IO.monoNanosNow
+      IO.printlnAndFlush s!"[time] bitblast: {t2 - t1}"
 
+      let t1 ← IO.monoNanosNow
       let res ←
         withTraceNode `sat (fun _ => return "Obtaining external proof certificate") do
           runSolver cnf solver lratPath cfg.trimProofs cfg.timeout cfg.binaryProofs cfg.solverMode
+      let t2 ← IO.monoNanosNow
+      IO.printlnAndFlush s!"[time] sat: {t2 - t1}"
 
       match res with
       | .ok cert =>
+        let t1 ← IO.monoNanosNow
         let certFine ←
           withTraceNode `sat (fun _ => return "Verifying LRAT certificate") do
             -- lazyPure to prevent compiler lifting
             IO.lazyPure (fun _ => LRAT.check cert cnf)
+        let t2 ← IO.monoNanosNow
+        IO.printlnAndFlush s!"[time] lrat: {t2 - t1}"
         if certFine then
           logInfo "unsat"
           return (0 : UInt8)
